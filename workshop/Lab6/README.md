@@ -6,9 +6,9 @@ Lab6では、Helmの理解のために、サンプルのチャートを作って
 ## チャートを作るための参考資料
 Helmの公式サイトにチャート開発のためのドキュメントがまとめられています。
 
-https://docs.helm.sh/developing_charts/
-https://docs.helm.sh/chart_template_guide/
-https://docs.helm.sh/chart_best_practices/
+- https://docs.helm.sh/developing_charts/
+- https://docs.helm.sh/chart_template_guide/
+- https://docs.helm.sh/chart_best_practices/
 
 ## チャートの作成
 チャートの雛形を作成してみます。任意の作業ディレクトリで以下のコマンドを実行してください。
@@ -309,7 +309,86 @@ Go Template言語で環境により異なる値が記載されています
    ```
 
 さらに、チャートのtemplatesディレクトリにあるdeployment.yamlを編集します。
-このLab6に付属しているdeployment.yamlに置き換えてください。
+
+   ```bash
+   apiVersion: apps/v1beta2
+   kind: Deployment
+   metadata:
+     name: {{ template "mychart.fullname" . }}
+     labels:
+       app: {{ template "mychart.name" . }}
+       chart: {{ template "mychart.chart" . }}
+       release: {{ .Release.Name }}
+       heritage: {{ .Release.Service }}
+   spec:
+     replicas: {{ .Values.replicaCount }}
+     selector:
+       matchLabels:
+         app: {{ template "mychart.name" . }}
+         release: {{ .Release.Name }}
+     template:
+       metadata:
+         labels:
+           app: {{ template "mychart.name" . }}
+           release: {{ .Release.Name }}
+       spec:
+         volumes:
+         - name: index-config
+           configMap:
+             name: index-config
+         - name: config-volume
+           emptyDir: {}
+         initContainers:
+         - name: init-myservice
+           image: busybox
+           command: ['sh', '-c', 'cat /etc/config-template/index.html | sed "s/__NAME__/{{ .Values.app.name }}/" > /etc/config/index.html']
+           env:
+           - name: mypassword
+             valueFrom:
+               secretKeyRef:
+                 name: my-password
+                 key: password
+           volumeMounts:
+           - name: config-volume
+             mountPath: /etc/config
+           - name: index-config
+             mountPath: /etc/config-template/index.html
+             readOnly: true
+             subPath: index.html
+         containers:
+           - name: {{ .Chart.Name }}
+             image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+             imagePullPolicy: {{ .Values.image.pullPolicy }}
+             volumeMounts:
+             - name: config-volume
+               mountPath: /usr/share/nginx/html/
+             ports:
+               - name: http
+                 containerPort: 80
+                 protocol: TCP
+             livenessProbe:
+               httpGet:
+                 path: /
+                 port: http
+             readinessProbe:
+               httpGet:
+                 path: /
+                 port: http
+             resources:
+   {{ toYaml .Values.resources | indent 12 }}
+       {{- with .Values.nodeSelector }}
+         nodeSelector:
+   {{ toYaml . | indent 8 }}
+       {{- end }}
+       {{- with .Values.affinity }}
+         affinity:
+   {{ toYaml . | indent 8 }}
+       {{- end }}
+       {{- with .Values.tolerations }}
+         tolerations:
+   {{ toYaml . | indent 8 }}
+       {{- end }}
+   ```
 
 完了したら再びhelm upgradeで更新します。
 
@@ -318,9 +397,7 @@ Go Template言語で環境により異なる値が記載されています
    ```
 
 あとはWebブラウザでアクセスし、画面の結果を確認します。
-メッセージが以下のように変わっていれば問題なく動いていることが確認できます。
-
-
+メッセージがhelmのvalueファイル (value-new.yaml)に指定した文字に変わっていれば問題なく動いていることが確認できます。
 
 ## お片付け
 
