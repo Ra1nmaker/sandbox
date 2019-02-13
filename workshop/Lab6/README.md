@@ -68,7 +68,7 @@ Go Template言語で環境により異なる値が記載されています
    ```
 
 {{ .Values.<変数名> }}となっている部分はvalues.yamlにあるデフォルト値が埋め込まれます。
-以下の設定の場合、values.yamlにあるreplicaCountという設定項目がdeployment.ymlのレプリカ数を指定する項目(spec.replicas)に反映されます。
+以下の設定の場合、例えばvalues.yamlにあるreplicaCountという設定項目が上記のdeployment.ymlのレプリカ数を指定する項目(spec.replicas)に反映されます。
 
    ```
    $cat values.yaml 
