@@ -1,236 +1,263 @@
-# Lab6: Helmでサンプル・チャートを作ってみる
+# Lab6: サンプル・チャートでHelmを理解する
 
 Lab6では、Helmの理解のために、サンプルのチャートを作ってKubernetesにデプロイします。
 チャートの構造を理解することで、提供されるチャートをただ使うのではなく、理解した上で利用できるようになります。
 
-## つくるもの
+## チャートを作るための参考資料
+Helmの公式サイトにチャート開発のためのドキュメントがまとめられています。
 
-Lab4ではWebとDBから構成されるレガシーなJavaアプリケーションをコンテナ化し、Kubernetesにデプロイしました。
-これにより、既存のアプリケーションがモダナイズ（Modernize)できたことになります。
+https://docs.helm.sh/developing_charts/
+https://docs.helm.sh/chart_template_guide/
+https://docs.helm.sh/chart_best_practices/
 
-Lab5ではモダナイズされたアプリを拡張し、新しい機能をマイクロサービスとして実装します。
-具体的にはGo言語で書かれたチャットアプリに、画像認識の機能を追加したアプリケーション（mmsserach）が該当します。
-
-## Visual Recognitionサービスの作成
-
-ブラウザで [IBM Cloudのカタログページ](https://cloud.ibm.com/catalog/) にアクセスし、Visual Recognitionサービスを作成します。
-サービスを作成する地域は「米国南部(Dallas)」、サービスプランは「ライト（Lite）」を選択し、「作成」をクリックします。
-
-IBM Cloudのライト・プランは無料で利用可能です。
-
-サービスが作成されると画面が遷移し、サービスの詳細画面が表示されます。このページで、API呼び出しをするために必要な**APIキー**が取得できます。このAPIキーはこの後使うのですぐに参照できるようにしておいてください。
-
-## Kubernetes secret の作成
-
-Kubernetes上のアプリケーションから外部APIを呼び出す際
-
-`Configmap` と `Secret` の2種類の方法がありますが、APIキーのようなより機密性のな情報についてはSecretを使用することが推奨されています。
-
-テンプレートファイル**mms-secrets.json.template**を使用して、**mms-secrets.json** ファイルを作成します:
+## チャートの作成
+チャートの雛形を作成してみます。任意の作業ディレクトリで以下のコマンドを実行してください。
 
    ```bash
-   # from jpetstore-kubernetes directory
-   cd mmssearch
-   cp mms-secrets.json.template mms-secrets.json
+   # 任意のディレクトリでhelm createコマンドを
+   $helm create mychart
+   Creating mychart
+   ```
+   
+できあがるディレクトリの構造は以下の通りです:
+   
+   ```bash
+   mychart/
+   ├── Chart.yaml             # チャートの情報を含むyaml
+   ├── charts                 # このチャートが依存するチャートを格納するディレクトリー
+   ├── templates              # マニフェストのテンプレートを格納するディレクトリー
+   │   ├── NOTES.txt          # OPTIONAL: チャートの使用方法を記載したプレーンテキスト
+   │   ├── _helpers.tpl       # 
+   │   ├── deployment.yaml    # deployment作成用のyaml
+   │   ├── ingress.yaml       # Ingress設定用のyaml
+   │   └── service.yaml       # サービス作成用のyaml
+   └── values.yaml            # このチャートのデフォルト値を記載したyaml
    ```
 
-エディタで**mms-secrets.json** を開き、先ほど作成したVisual RecognitionのAPIキーを貼り付けます。
+## deployment.ymlを紐解く
+作成されたtemplates/deployment.ymlをみてみましょう。
+Go Template言語で環境により異なる値が記載されています
 
-   ![](readme_images/watson_credentials.png)
+   ```bash
+   $cat templates/deployment.yaml 
+   apiVersion: apps/v1beta2
+   kind: Deployment
+   metadata:
+     name: {{ template "mychart.fullname" . }}
+     labels:
+       app: {{ template "mychart.name" . }}
+       chart: {{ template "mychart.chart" . }}
+       release: {{ .Release.Name }}
+       heritage: {{ .Release.Service }}
+   spec:
+     replicas: {{ .Values.replicaCount }}
+     selector:
+       matchLabels:
+         app: {{ template "mychart.name" . }}
+         release: {{ .Release.Name }}
+     template:
+       metadata:
+         labels:
+           app: {{ template "mychart.name" . }}
+           release: {{ .Release.Name }}
+       spec:
+         containers:
+           - name: {{ .Chart.Name }}
+   :
+   (以下省略)
+   ```
 
+{{ .Values.<変数名> }}となっている部分はvalues.yamlにあるデフォルト値が埋め込まれます。
+以下の設定の場合、values.yamlにあるreplicaCountという設定項目がdeployment.ymlのレプリカ数を指定する項目(spec.replicas)に反映されます。
 
-`kubectl`コマンドを使用してKuberenetesクラスターのSecretを生成します。
+   ```
+   $cat values.yaml 
+   # Default values for mychart.
+   # This is a YAML-formatted file.
+   # Declare variables to be passed into your templates.
 
-```bash
-# from the jpetstore-kubernetes directory
-cd mmssearch
-kubectl create secret generic mms-secret --from-file=mms-secrets=./mms-secrets.json
-```
+   replicaCount: 1
 
-Secretが正しく生成できているか確認します。
+   image:
+     repository: nginx
+     tag: stable
+     pullPolicy: IfNotPresent
 
-```bash
-kubectl get secret
-```
+   service:
+     type: ClusterIP
+     port: 80
 
-```bash
-kubectl get secret mms-secret -o yaml
-```
+   :
+   (以下省略)
+   ```
 
-mms-search欄にはランダムの文字列が並んでいますが、これはAPIキーがBase64 エンコードされているものです。
-なお、Configmapとして生成した場合は暗号化されず平文のまま値が格納されます。
+## サンプル・チャートを利用する
+まずはこのままサンプルを利用してデプロイしてみましょう。「helm install <任意の名前> ＜チャート・ディレクトリー＞」を実行します。
 
-これで、Visual RecognitionのAPIキーがSecretとしてKubernetesクラスターに渡されました。
-実際にアプリケーションから読み出す方法はSecretをVolumeとしてマウントする方法と、環境変数としてSecretを参照する方法があります。
-今回のアプリでは以下のようにVolumeとしてマウントする方法で実装されています。
+   ```bash
+   $helm install --name sample ./mychart
+   NAME:   sample
+   LAST DEPLOYED: Wed Feb 13 18:40:59 2019
+   NAMESPACE: default
+   STATUS: DEPLOYED
 
-```yaml
-    spec:
-        volumeMounts:
-         - name: service-secrets
-           mountPath: "/etc/secrets"
-           readOnly: true
-      volumes:
-      - name: service-secrets
-        secret:
-          secretName: mms-secret
-          items:
-          - key: mms-secrets
-            path: mms-secrets.json
-`
-```
+   RESOURCES:
+   ==> v1beta2/Deployment
+   NAME            DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  AGE
+   sample-mychart  1        1        1           0          1s
 
-これにより`/etc/secret/mms-secrets.json`がマウントされます。
+   ==> v1/Pod(related)
+   NAME                            READY  STATUS             RESTARTS  AGE
+   sample-mychart-6cc9cb59d-vnm5g  0/1    ContainerCreating  0         1s
 
-### 補足
-
-IBM Cloudでは、KubernetesクラスターとIBM Cloudのサービスの接続を容易にするためのコマンドも用意されています。
-
-```bash
-ibmcloud ks cluster-service-bind mycluster default visual-recognition-xx
-```
-
-これを実行すると、`binding-<サービスインスタンス名>`という名前のsecretが生成されます。
-ただし実行前にCFの組織とスペースを`ibmcloud target`で指定する必要があります。
-詳しくはリンクを参照してください。
-
-
-この場合`jpetstore-watson-nodeport.yaml`を変更する必要あり。
-```yaml
-kind: Deployment
-apiVersion: extensions/v1beta1
-metadata:
-  name: mmssearch
-spec:
-  replicas: 1
-  template:
-    metadata:
-      labels:
-        app: mmssearch
-      annotations:
-        sidecar.istio.io/inject: "true"
-    spec:
-      containers:
-      - name: mmssearch
-        image: kissyyy/mmssearch
-        ports:
-        - containerPort: 8080
-        env:
-        - name: DB_LOCATION
-          value: "tcp(db)/jpetstore"
-        volumeMounts:
-         - name: binding #変更
-           mountPath: "/etc/secrets"
-           readOnly: true
-      volumes:
-      - name: binding #変更
-        secret:
-          secretName: binding-vr-jpet #変更
-          items:
-          - key: binding #変更
-            path: mms-secrets.json #変更するならmmssearch/main.goの記述を変更する
-```
+   ==> v1/Service
+   NAME            TYPE       CLUSTER-IP     EXTERNAL-IP  PORT(S)  AGE
+   sample-mychart  ClusterIP  172.21.153.99  <none>       80/TCP   1s
 
 
-## アプリケーションのデプロイ
+   NOTES:
+   1. Get the application URL by running these commands:
+     export POD_NAME=$(kubectl get pods --namespace default -l "app=mychart,release=sample" -o jsonpath="{.items[0].metadata.name}")
+     echo "Visit http://127.0.0.1:8080 to use your application"
+     kubectl port-forward $POD_NAME 8080:80
+   ```
 
-There are two different ways to deploy the three micro-services to a Kubernetes cluster:
+問題なくデプロイができたかは、以下のコマンドで確認します:
 
-- Using [Helm](https://helm.sh/) to provide values for templated charts (recommended)
-- Or, updating yaml files with the right values and then running  `kubectl create`
+   ```bash
+   $helm ls
+   NAME  	REVISION	UPDATED                 	STATUS  	CHART        	NAMESPACE
+   sample	1       	Wed Feb 13 18:40:59 2019	DEPLOYED	mychart-0.1.0	default 
+   ```
 
-### オプション 1: Helmを利用してデプロイ
+   ```bash
+   $kubectl get po
+   NAME                             READY     STATUS    RESTARTS   AGE
+   sample-mychart-6cc9cb59d-vnm5g   1/1       Running   0          4m
+   ```
 
-1. Install [Helm](https://docs.helm.sh/using_helm/#installing-helm). (`brew install kubernetes-helm` on MacOS)
+実際にアプリケーションにアクセスするために、「kubectl port-forward <Pod名> <任意のポート番号>:80」でポートフォワーディングします。
 
-2. Find your **Ingress Subdomain** by running `ibmcloud cs cluster-get YOUR_CLUSTER_NAME` , it will look similar to "mycluster.us-south.containers.mybluemix.net".
+   ```bash
+   $kubectl port-forward sample-mychart-6cc9cb59d-vnm5g 8080:80
+   Forwarding from 127.0.0.1:8080 -> 80
+   Forwarding from [::1]:8080 -> 80
+   ```
 
-3. Open `../helm/modernpets/values.yaml` and make the following changes.
+この状態で、Webブラウザから「http://localhost:<指定したポート番号>」でアクセスすればサンプルのWebページが表示されます。
 
-    - Update `repository` and replace `<NAMESPACE>` with your Container Registry namespace.
-    - Update `hosts` and replace `<Ingress Subdomain>` with your Ingress Subdomain.
+## 設定を変更する
+では、次にIKSのフリークラスターに合わせ、KubernetesのNodePortで公開できるように、テンプレートを修正してみましょう。
 
-4. Repeat the previous step and update `../helm/mmssearch/values.yaml` with the same changes.
+   ```bash
+   $cat mychart/templates/service.yaml 
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: {{ template "mychart.fullname" . }}
+     labels:
+       app: {{ template "mychart.name" . }}
+       chart: {{ template "mychart.chart" . }}
+       release: {{ .Release.Name }}
+       heritage: {{ .Release.Service }}
+   spec:
+     type: {{ .Values.service.type }}
+     ports:
+       - port: {{ .Values.service.port }}
+         targetPort: http
+         protocol: TCP
+         name: http
+         {{- if .Values.service.nodePort }}
+         nodePort: {{ .Values.service.nodePort }}
+         {{- end}}
+     selector:
+       app: {{ template "mychart.name" . }}
+       release: {{ .Release.Name }}
+   ```
 
-5. Next, install JPetStore and Visual Search using the helm yaml files you just created:
+以下の設定を追記しています。
 
-    ```bash
-    # Change into the helm directory
-    cd ../helm
+   ```bash
+      {{- if and (.Values.service.nodePort) (eq .Values.service.type "NodePort") }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end}}
+   ```
 
-    # Initialize helm
-    helm init
+変更したらテンプレートの記載が正しいかのチェックを行います。「helm lint <helmチャートのディレクトリ>」を実行します。
 
-    # Create the JPetstore app
-    helm install --name jpetstore ./modernpets
+   ```bash
+   $helm lint ./mychart/
+   ==> Linting ./mychart/
+   [INFO] Chart.yaml: icon is recommended
 
-    # Ceate the MMSSearch microservice
-    helm install --name mmssearch ./mmssearch
-    ```
+   1 chart(s) linted, no failures
+   ```
+   
+次に設定した値を変更していきましょう。
+デフォルト値が定義されているvalue.yamlをコピーします。
 
-### オプション 2: YAMLファイルを使用してデプロイ
+   ```bash
+   $cp -p mychart/values.yaml value-new.yaml
+   ```
 
-yamlファイルを使用して宣言的にデプロイを実行します。
+コピーしたファイル(value-new.yaml)を開き、以下のようにserviceの項目にあるtypeの設定を修正、そしてnodePortの項目を追加します。
+   
+   ```bash
+   ＃ value-new.yamlに設定追加 (serviceの項目にnodePortを追加)
+   
+   service:
+      type: NodePort
+      port: 80
+      nodePort: 30001
+   ```
 
-1. Edit **jpetstore/jpetstore.yaml** and **jpetstore/jpetstore-watson.yaml** and replace all instances of:
+上記の設定後、helm upgradeコマンドでhelmリリースを更新します。
+先ほどと同じように処理が実行されれば問題なく実行できています。
 
-  - `<CLUSTER DOMAIN>` with your Ingress Subdomain (`ibmcloud cs cluster-get CLUSTER_NAME`)
-  - `<REGISTRY NAMESPACE>` with your Image registry URL. For example:`registry.ng.bluemix.net/mynamespace`
+   ```bash
+   $helm upgrade -f value-new.yaml sample ./mychart/
+   Release "sample" has been upgraded. Happy Helming!
+   LAST DEPLOYED: Wed Feb 13 19:51:15 2019
+   NAMESPACE: default
+   STATUS: DEPLOYED
 
-2. `kubectl create -f jpetstore.yaml`  - This creates the JPetstore app and database microservices
-3. `kubectl create -f jpetstore-watson.yaml`  - This creates the MMSSearch microservice
+   RESOURCES:
+   ==> v1/Service
+   NAME            TYPE      CLUSTER-IP     EXTERNAL-IP  PORT(S)       AGE
+   sample-mychart  NodePort  172.21.153.99  <none>       80:30001/TCP  1h
 
-## 動作確認
+   ==> v1beta2/Deployment
+   NAME            DESIRED  CURRENT  UP-TO-DATE  AVAILABLE  AGE
+   sample-mychart  1        1        1           1          1h
 
-You are now ready to use the UI to shop for a pet or query the store by sending it a picture of what you're looking at:
+   ==> v1/Pod(related)
+   NAME                            READY  STATUS   RESTARTS  AGE
+   sample-mychart-6cc9cb59d-vnm5g  1/1    Running  0         1h
 
-1. Access the java jpetstore application web UI for JPetstore at `http://jpetstore.<Ingress Subdomain>/shop/index.do`
 
-   ![](readme_images/petstore.png)
+   NOTES:
+   1. Get the application URL by running these commands:
+     export NODE_PORT=$(kubectl get --namespace default -o jsonpath="{.spec.ports[0].nodePort}" services sample-mychart)
+     export NODE_IP=$(kubectl get nodes --namespace default -o jsonpath="{.items[0].status.addresses[0].address}")
+     echo http://$NODE_IP:$NODE_PORT
+   ```
+  
+今度は実際にNodePortでアクセスしてみましょう。「ibmcloud ks workers <クラスター名>」を実行し、パブリックIPアドレスを確認します。
+確認したあとで「http://<パブリックIPアドレス>:30001」でアクセスすれば、再びサンプルのアプリケーションにアクセスできます。
 
-2. Access the mmssearch app and start uploading images from `pet-images` directory.
-
-   ![](readme_images/webchat.png)
-
-## アプリの変更
-
-mmssearch.go or index.htmlを変更し再度docker buildする。
-ビルドはibmclodu cr buildで実行
-
+   ```bash
+   $ibmcloud ks workers mycluster
+   OK
+   ID                         パブリック IP     プライベート IP   マシン・タイプ   状態     状況    ゾーン   バージョン   
+   kube-hou02-xxxxxxxxxx-w1   184.xxx.x.xx    10.76.194.59    free             normal   Ready   hou02    1.10.12_1543 
+   ```
 
 ## お片付け
 
 ```bash
 # Use "helm delete" to delete the two apps
-helm delete jpetstore --purge
-helm delete mmssearch --purge
-
-# Delete the secrets stored in our cluster
-kubectl delete secret mms-secret
-
-# Remove the container images from the registry
-ibmcloud cr image-rm ${MYREGISTRY}/${MYNAMESPACE}/mmssearch
-ibmcloud cr image-rm ${MYREGISTRY}/${MYNAMESPACE}/jpetstoreweb
-ibmcloud cr image-rm ${MYREGISTRY}/${MYNAMESPACE}/jpetstoredb
+helm delete sample --purge
 
 # Delete your entire cluster!
 ibmcloud cs cluster-rm yourclustername
 ```
-
-## Troubleshooting
-
-### The toolchain complains about "incompatible versions" for helm
-
-The DEPLOY log shows:
-```
-Error: UPGRADE FAILED: incompatible versions client[v2.8.1] server[v2.4.2]
-```
-
-It means you have already `helm` installed in your cluster and this version is not compatible with the one from the toolchain.
-
-Two options:
-1. Before running the toolchain again, update `helm` to the version used by the toolchain on your local machine then issue a `helm init --upgrade` against the cluster.
-2. Edit `bluemix/pipeline-DEPLOY.sh` at line 60 in your repository and replace `helm init` with `helm init --upgrade`.
-
-Then re-run the DEPLOY job.
-
